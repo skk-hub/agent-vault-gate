@@ -22,7 +22,7 @@ If AI agents write to a knowledge base unattended, three things rot it:
 
 | Invariant | Enforcement |
 |---|---|
-| Evidence is append-only | `raw/` accepts new dated files only; edits/deletes blocked |
+| Evidence is append-only **by default** | `raw/` accepts new dated files only; edits/deletes blocked except via the explicit `[destructive]` path below |
 | Deletions are loud | any deletion requires a `[destructive]` marker in the commit subject — those commits humans read line-by-line |
 | Every claim page carries its contract | frontmatter must be complete: `title`, `type`, `area`, dates, `review_by` (staleness window), `sources` (citations into `raw/`), `status` |
 | Pages can't lie about where they live | `area:` field must match the directory the page sits in |

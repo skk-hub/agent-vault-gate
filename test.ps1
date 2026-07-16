@@ -3,7 +3,8 @@
 # and asserts the validator's exit code. No frameworks, no dependencies.
 $ErrorActionPreference = 'Stop'
 $root = $PSScriptRoot
-$ps = (Get-Command pwsh -ErrorAction SilentlyContinue) ?? (Get-Command powershell)
+$ps = Get-Command pwsh -ErrorAction SilentlyContinue
+if (-not $ps) { $ps = Get-Command powershell }
 $work = Join-Path ([System.IO.Path]::GetTempPath()) "vault-gate-test-$(Get-Random)"
 
 function New-TestVault {
