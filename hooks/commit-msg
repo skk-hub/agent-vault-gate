@@ -1,0 +1,4 @@
+#!/bin/sh
+# vault gate - mechanical convention checks run on every commit
+PS=$(command -v pwsh || command -v powershell)
+"$PS" -NoProfile -File "$(git rev-parse --show-toplevel)/scripts/validate-vault.ps1" "$1"
