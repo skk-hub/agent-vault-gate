@@ -115,8 +115,8 @@ Every rule was paid for by a real incident:
 ## Authorship
 
 Built solo, pair-programming with Claude Code: the invariant model, the review
-split, and the decisions above are mine; much of the implementation is
-AI-generated and human-reviewed. The system exists precisely because AI output
+split, and the decisions above are mine; the implementation is AI-generated and
+verified by behavior — the test suite in this repo is that discipline made concrete. The system exists precisely because AI output
 can be confidently wrong — the production incident log above includes the AI
 itself misreporting completion, which is what "gate everything mechanically"
 is for.
