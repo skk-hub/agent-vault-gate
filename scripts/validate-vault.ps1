@@ -6,12 +6,20 @@ param([string]$MsgFile)
 
 $repo = (git rev-parse --show-toplevel).Trim()
 $msg = if ($MsgFile -and (Test-Path $MsgFile)) { Get-Content $MsgFile -Raw } else { '' }
-# subject line only — a body that merely *mentions* the marker is not an override
-$destructive = ($msg -split "`r?`n")[0] -match '\[destructive\]'
+# Subject line only, and ANCHORED: a body that mentions the marker is not an override, and
+# neither is a subject that merely talks about it ("document what [destructive] means").
+$destructive = ($msg -split "`r?`n")[0].TrimStart() -match '^\[destructive\]'
 $fail = [System.Collections.Generic.List[string]]::new()
 
-$staged = git diff --cached --name-status --no-renames |
-  ForEach-Object { $s, $p = $_ -split "`t", 2; [pscustomobject]@{ Status = $s; Path = $p } }
+# -z + quotepath=false, because git otherwise QUOTES any path containing a non-ASCII byte:
+# raw/note-café.md arrives as "raw/note-caf\303\251.md", and that leading double-quote makes
+# every path test below miss — one accented filename would skip raw/, frontmatter, area,
+# changelog and wikilink enforcement in one go. -z also survives quotes and newlines in names.
+$fields = ((git -c core.quotepath=false diff --cached --name-status -z --no-renames) -join "`n") -split "`0" |
+  Where-Object { $_ -ne '' }
+$staged = @(for ($i = 0; $i -lt $fields.Count - 1; $i += 2) {
+  [pscustomobject]@{ Status = $fields[$i]; Path = $fields[$i + 1] }
+})
 if (-not $staged) { exit 0 }
 
 # --- raw/ is append-only; deletions anywhere are destructive ---
@@ -50,10 +58,15 @@ if ($wikiPages -and -not ($staged | Where-Object Path -eq 'meta/changelog.md')) 
 
 # --- wikilinks in staged files must resolve (the #1 observed rot) ---
 $targets = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
-Get-ChildItem "$repo\areas", "$repo\wiki", "$repo\meta" -Recurse -Filter *.md | ForEach-Object {
-  [void]$targets.Add($_.BaseName)
-  $t = Get-Content $_.FullName -TotalCount 3 | Where-Object { $_ -match '^title:\s*(.+)$' } | ForEach-Object { $Matches[1].Trim() }
-  if ($t) { [void]$targets.Add($t) }
+# Targets come from the INDEX, not the working tree. Reading the filesystem let an UNSTAGED
+# file satisfy a link, so the commit landed with a wikilink resolving to nothing.
+foreach ($p in (git -c core.quotepath=false ls-files -- areas wiki meta 2>$null)) {
+  if ($p -match '\.md$') { [void]$targets.Add([System.IO.Path]::GetFileNameWithoutExtension($p)) }
+}
+# One git call for every frontmatter title in the index; the line-number guard keeps this to
+# frontmatter rather than any 'title:' in prose.
+foreach ($line in (git grep --cached -n -h -e '^title:' -- areas wiki meta 2>$null)) {
+  if ($line -match '^[1-3]:title:\s*(.+)$') { [void]$targets.Add($Matches[1].Trim()) }
 }
 foreach ($f in $staged | Where-Object { $_.Status -in 'A', 'M' -and $_.Path -match '^(areas|wiki|meta)/.*\.md$' }) {
   $txt = (git show ":$($f.Path)" 2>$null) -join "`n"
