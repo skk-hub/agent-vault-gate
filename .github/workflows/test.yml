@@ -8,7 +8,7 @@ permissions:
   contents: read
 
 jobs:
-  test:
+  windows:
     runs-on: windows-latest
     strategy:
       matrix:
@@ -18,3 +18,11 @@ jobs:
       - name: Run the gate tests under ${{ matrix.runtime }}
         shell: pwsh
         run: ./test.ps1 -Runtime '${{ matrix.runtime }}'
+  linux:
+    # The hook is a sh script and the quote/newline filename scenarios only run here.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run the gate tests under pwsh
+        shell: pwsh
+        run: ./test.ps1

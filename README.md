@@ -13,11 +13,12 @@ synthetic sample vault and a test script.
 - A file under `raw/` can be added. Editing or deleting one is blocked unless the commit subject
   starts with `[destructive]`. A subject that merely mentions the marker does not count.
 - Deleting any file is blocked without that same subject prefix.
-- Turning a markdown page under `areas/`, `wiki/` or `meta/` into a symlink is blocked.
-- An added or changed markdown page under `areas/<area>/` (four housekeeping filenames excepted)
-  has to open with a closed frontmatter block carrying eight nonempty fields: `title`, `type`,
-  `area`, `created`, `updated`, `review_by`, `sources`, `status`. Its `area` value has to equal
-  the directory name. A page directly under `areas/` is rejected.
+- A symlink under `raw/`, or in place of a markdown page under `areas/`, `wiki/` or `meta/`, is
+  blocked whether it is new or replaces a file.
+- A markdown page directly under `areas/` is rejected, whatever its name. An added or changed page
+  under `areas/<area>/` (four housekeeping filenames excepted) has to open with a closed
+  frontmatter block carrying eight nonempty fields: `title`, `type`, `area`, `created`,
+  `updated`, `review_by`, `sources`, `status`. Its `area` value has to equal the directory name.
 - If any such page changed, `meta/changelog.md` has to be added or modified in the same commit.
   The hook checks the file changed; it does not read the entry.
 - Every `[[wikilink]]` in a staged markdown page under `areas/`, `wiki/` or `meta/` has to resolve
@@ -26,9 +27,13 @@ synthetic sample vault and a test script.
   files that were not staged are not checked, so a `[destructive]` deletion can leave links
   elsewhere broken.
 
-Staged paths are read NUL-delimited with git's path quoting off, so a filename with an accent, a
-quote or a newline goes through the same checks. Every git call is checked for its exit code; if
-git fails, the gate exits 2 and the commit does not go through.
+Staged paths and the index are read NUL-delimited with git's path quoting off, so a filename with
+an accent, a quote or a newline goes through the same checks (the accent case runs everywhere; the
+quote and newline cases run on the Linux job, since Windows does not allow those filenames). One
+function parses frontmatter, both to validate a staged page and to collect the titles a link can
+point at, so `Title:` or a CRLF page reads the same on both sides. Every git call is checked for
+its exit code; if git fails, the gate exits 2 with git's own error and the commit does not go
+through.
 
 ## What it does not do
 
@@ -43,14 +48,16 @@ git fails, the gate exits 2 and the commit does not go through.
 ## The review digest
 
 `scripts/review-digest.ps1` lists everything since the local `reviewed` tag: the commits, with
-`[destructive]` ones called out, every line any of those commits added to `meta/changelog.md`,
-and a diffstat. It ends with the hash it covered, and `-Mark -Through <that hash>` moves the tag
-there, so a commit that landed while you were reading cannot be marked reviewed by accident. The
-first run creates the tag at HEAD; nothing before that point is reviewed by this tool. If the tag
-is not an ancestor of HEAD the script refuses rather than print an ambiguous range. It summarises
-what changed; it does not show every changed page. I moved to this from reading each commit when
-several agent sessions started committing at the same time and per-commit review stopped
-happening.
+`[destructive]` ones called out (same trimmed-subject test as the gate), every line the range
+added to `meta/changelog.md` along the first-parent chain (so a merge shows what it brought in,
+including a resolution-only edit), and a diffstat. It ends with the hash it covered, and
+`-Mark -Through <that hash>` moves the tag there. `-Through` has to be that full hash and has to
+sit between the tag and HEAD; `HEAD`, a short hash or a branch name is refused, so a commit that
+landed while you were reading cannot be marked reviewed by accident. The first run creates the
+tag at HEAD; nothing before that point is reviewed by this tool. If the tag is not an ancestor of
+HEAD the script refuses rather than print an ambiguous range. It summarises what changed; it does
+not show every changed page. I moved to this from reading each commit when several agent sessions
+started committing at the same time and per-commit review stopped happening.
 
 ## Run the tests
 
@@ -60,12 +67,17 @@ happening.
 ```
 
 The script builds a throwaway git repo from `sample-vault/` and checks the gate's exit code and
-its diagnostic for seventeen scenarios (each rule above, the non-ASCII filename, the mid-subject
-marker, the unstaged link target, the deleted changelog, the unclosed frontmatter, the symlink).
-It then copies `hooks/commit-msg` into that repo and makes two real commits through it, one that
-has to be blocked and one that has to pass, and finally runs the digest through a create, list,
-mark and empty cycle. It exits 1 if anything fails. GitHub Actions runs it on every push under
-both runtimes.
+its diagnostic for each rule above and each way past it that review found (the non-ASCII, quoted
+and newline filenames, the mid-subject and leading-space markers, the unstaged link target, the
+deleted changelog, the unclosed frontmatter, the housekeeping name in the wrong place, the two
+symlink shapes, the `Title:` CRLF page), plus git failing under the gate. It then copies
+`hooks/commit-msg` into that repo and makes two real commits through it, one that has to be
+blocked and one that has to pass, and finally runs the digest through create, list (destructive
+commit, blank and `+`-prefixed changelog lines, a merge resolution), the three refused `-Through`
+forms, mark, empty, and a tag off the branch. Every setup step is exit-code checked and a
+scenario with nothing staged fails rather than passing on an empty index. It exits 1 if anything
+fails. GitHub Actions runs it on every push under PowerShell 7 and 5.1 on Windows and PowerShell 7
+on Ubuntu.
 
 To use it on a real vault: copy `scripts/` in and `hooks/commit-msg` to `.git/hooks/`, keeping
 the file executable.
@@ -81,9 +93,6 @@ Each one follows something that went wrong in the source vault:
   directory appeared and the list stayed wrong for six weeks. The `area` field is checked against
   the directory the file is in for the same reason: a stated fact gets compared with the
   filesystem before it is believed.
-- An agent reported a task complete when it was not, and a green uptime monitor once hid a dead
-  service (the port listened; the app was gone). That is why the tests build a real repo, install
-  the real hook and commit through it, and assert on the diagnostic as well as the exit code.
 
 ## Design notes
 
@@ -99,8 +108,8 @@ Each one follows something that went wrong in the source vault:
 
 Claude Code produced much of the implementation; I defined the behaviour and acceptance criteria,
 reviewed what it produced against those, and owned testing and deployment. The current version
-followed an adversarial review of the first public one, which found several bypasses; the tests
-above are the ones that review asked for.
+followed two adversarial reviews of earlier public ones, each of which found bypasses that are
+now scenarios in `test.ps1`.
 
 ## License
 
