@@ -1,4 +1,7 @@
 #!/bin/sh
-# vault gate - mechanical convention checks run on every commit
-PS=$(command -v pwsh || command -v powershell)
-"$PS" -NoProfile -File "$(git rev-parse --show-toplevel)/scripts/validate-vault.ps1" "$1"
+# vault gate: shape checks on every commit. Copy to .git/hooks/commit-msg and keep it executable.
+PS=$(command -v pwsh || command -v powershell) || {
+  echo "agent-vault-gate: PowerShell was not found" >&2
+  exit 127
+}
+exec "$PS" -NoProfile -File "$(git rev-parse --show-toplevel)/scripts/validate-vault.ps1" "$1"

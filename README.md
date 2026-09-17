@@ -1,31 +1,34 @@
 # agent-vault-gate
 
-Pre-commit checks for a few conventions in a markdown vault, plus a digest for reviewing commits
-in batches. Extracted from a private personal knowledge base that several AI agents write to
-(Claude Code sessions, a headless ingest job, an always-on orchestrator). The vault itself stays
-private; this repo holds the hook, the digest script, a synthetic sample vault and a test script.
+A `commit-msg` hook that checks a few conventions in a markdown vault before a commit lands, plus
+a digest for reviewing commits in batches. Extracted from a private personal knowledge base that
+several AI agents write to (Claude Code sessions, a headless ingest job, an always-on
+orchestrator). The vault itself stays private; this repo holds the hook, the digest script, a
+synthetic sample vault and a test script.
 
 ## What the hook checks
 
-`hooks/commit-msg` runs `scripts/validate-vault.ps1` (85 lines of PowerShell) against the staged
-files of the commit:
+`hooks/commit-msg` runs `scripts/validate-vault.ps1` against the staged files of the commit:
 
 - A file under `raw/` can be added. Editing or deleting one is blocked unless the commit subject
-  starts with `[destructive]`.
+  starts with `[destructive]`. A subject that merely mentions the marker does not count.
 - Deleting any file is blocked without that same subject prefix.
-- An added or changed markdown file under `areas/` (four housekeeping filenames excepted) has to
-  open with frontmatter carrying eight nonempty fields: `title`, `type`, `area`, `created`,
-  `updated`, `review_by`, `sources`, `status`. Its `area` value has to match the directory it sits
-  in.
-- If any such page changed, `meta/changelog.md` has to be staged in the same commit. The hook checks
-  that the file is staged; it does not read the entry.
-- Every `[[wikilink]]` in a staged markdown file under `areas/`, `wiki/` or `meta/` has to resolve to
-  a page in the index, by filename or by frontmatter title. Links in files that were not staged are
-  not checked, so a `[destructive]` deletion can leave links elsewhere broken.
+- Turning a markdown page under `areas/`, `wiki/` or `meta/` into a symlink is blocked.
+- An added or changed markdown page under `areas/<area>/` (four housekeeping filenames excepted)
+  has to open with a closed frontmatter block carrying eight nonempty fields: `title`, `type`,
+  `area`, `created`, `updated`, `review_by`, `sources`, `status`. Its `area` value has to equal
+  the directory name. A page directly under `areas/` is rejected.
+- If any such page changed, `meta/changelog.md` has to be added or modified in the same commit.
+  The hook checks the file changed; it does not read the entry.
+- Every `[[wikilink]]` in a staged markdown page under `areas/`, `wiki/` or `meta/` has to resolve
+  to a page in the index, by filename or by the `title` inside its frontmatter block. Targets come
+  from the index, so a file that exists only in the working tree does not satisfy a link. Links in
+  files that were not staged are not checked, so a `[destructive]` deletion can leave links
+  elsewhere broken.
 
-Staged paths are read with `git diff --cached -z` and `core.quotepath=false`, so a filename with a
-non-ASCII character, a quote or a newline goes through the same checks. An earlier version missed
-those, and the fix is in the history with a test for each case.
+Staged paths are read NUL-delimited with git's path quoting off, so a filename with an accent, a
+quote or a newline goes through the same checks. Every git call is checked for its exit code; if
+git fails, the gate exits 2 and the commit does not go through.
 
 ## What it does not do
 
@@ -34,40 +37,38 @@ those, and the fix is in the history with a test for each case.
 - `git commit --no-verify` skips the hook. This is a guard against error and drift by cooperating
   agents. Against an adversary it is no protection at all; that needs server-side checks, which a
   personal vault does not warrant.
-- Prompt injection through ingested content is handled upstream: in the source system,
-  untrusted captures are stored as evidence and never executed as instructions.
+- It does nothing about prompt injection through ingested content. That trust boundary belongs to
+  whatever ingests the content, upstream of any commit.
 
 ## The review digest
 
-`scripts/review-digest.ps1` lists everything since the last `reviewed` tag: the commits, with
-`[destructive]` ones called out, the lines added to `meta/changelog.md`, and a diffstat. `-Mark`
-moves the tag. It summarises what changed; it does not show every changed page. I moved to this
-from reading each commit when several agent sessions started committing at the same time and
-per-commit review stopped happening.
+`scripts/review-digest.ps1` lists everything since the local `reviewed` tag: the commits, with
+`[destructive]` ones called out, every line any of those commits added to `meta/changelog.md`,
+and a diffstat. It ends with the hash it covered, and `-Mark -Through <that hash>` moves the tag
+there, so a commit that landed while you were reading cannot be marked reviewed by accident. The
+first run creates the tag at HEAD; nothing before that point is reviewed by this tool. If the tag
+is not an ancestor of HEAD the script refuses rather than print an ambiguous range. It summarises
+what changed; it does not show every changed page. I moved to this from reading each commit when
+several agent sessions started committing at the same time and per-commit review stopped
+happening.
 
 ## Run the tests
 
 ```powershell
-./test.ps1
+./test.ps1                      # validator under PowerShell 7
+./test.ps1 -Runtime powershell  # validator under Windows PowerShell 5.1
 ```
 
-Builds a throwaway git repo from `sample-vault/` and checks the gate's verdict for eight
-representative cases:
+The script builds a throwaway git repo from `sample-vault/` and checks the gate's exit code and
+its diagnostic for seventeen scenarios (each rule above, the non-ASCII filename, the mid-subject
+marker, the unstaged link target, the deleted changelog, the unclosed frontmatter, the symlink).
+It then copies `hooks/commit-msg` into that repo and makes two real commits through it, one that
+has to be blocked and one that has to pass, and finally runs the digest through a create, list,
+mark and empty cycle. It exits 1 if anything fails. GitHub Actions runs it on every push under
+both runtimes.
 
-```
-PASS  valid new page + changelog entry -> accepted
-PASS  frontmatter missing review_by -> blocked
-PASS  area field contradicts directory -> blocked
-PASS  editing an evidence snapshot in raw/ -> blocked
-PASS  same raw/ edit with [destructive] marker -> accepted (loud path)
-PASS  deleting a page without [destructive] -> blocked
-PASS  wiki edit without a changelog entry -> blocked
-PASS  broken wikilink -> blocked
-```
-
-The script exits 1 if any case fails, and the same script runs in GitHub Actions on every push.
-
-To use it on a real vault: copy `scripts/` in and `hooks/commit-msg` to `.git/hooks/`.
+To use it on a real vault: copy `scripts/` in and `hooks/commit-msg` to `.git/hooks/`, keeping
+the file executable.
 
 ## Why these rules
 
@@ -81,13 +82,13 @@ Each one follows something that went wrong in the source vault:
   the directory the file is in for the same reason: a stated fact gets compared with the
   filesystem before it is believed.
 - An agent reported a task complete when it was not, and a green uptime monitor once hid a dead
-  service (the port listened; the app was gone). That is why `test.ps1` builds a real repo and runs
-  the real hook; the functions are never tested in isolation.
+  service (the port listened; the app was gone). That is why the tests build a real repo, install
+  the real hook and commit through it, and assert on the diagnostic as well as the exit code.
 
 ## Design notes
 
-- Review in batches, because per-commit review stopped happening once several
-  sessions were committing concurrently.
+- Review in batches, because per-commit review stopped happening once several sessions were
+  committing concurrently.
 - Git as the record. It already keeps history, authorship metadata and diffs in a format that fits
   a markdown vault. Its history can be rewritten, and the workflow still needs review and
   maintenance.
@@ -97,4 +98,10 @@ Each one follows something that went wrong in the source vault:
 ## Authorship
 
 Claude Code produced much of the implementation; I defined the behaviour and acceptance criteria,
-reviewed what it produced against those, and owned testing and deployment.
+reviewed what it produced against those, and owned testing and deployment. The current version
+followed an adversarial review of the first public one, which found several bypasses; the tests
+above are the ones that review asked for.
+
+## License
+
+MIT, see [LICENSE](LICENSE).

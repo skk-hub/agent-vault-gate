@@ -4,11 +4,17 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: windows-latest
+    strategy:
+      matrix:
+        runtime: [pwsh, powershell]
     steps:
       - uses: actions/checkout@v4
-      - name: Run the gate tests
+      - name: Run the gate tests under ${{ matrix.runtime }}
         shell: pwsh
-        run: ./test.ps1
+        run: ./test.ps1 -Runtime '${{ matrix.runtime }}'
