@@ -1,55 +1,58 @@
 # agent-vault-gate
 
-Mechanical trust for AI-written knowledge bases: a git commit gate and batch-review
-workflow that let multiple AI agents write to one markdown vault **unattended**,
-without a human reading every diff — extracted from a private personal knowledge
-system where this has been running in production since mid-2026 (~230 documents,
-several concurrent agent writers: Claude Code sessions, a headless auto-ingest
-agent, and an always-on orchestrator).
+Pre-commit checks for a few conventions in a markdown vault, plus a digest for reviewing commits
+in batches. Extracted from a private personal knowledge base that several AI agents write to
+(Claude Code sessions, a headless ingest job, an always-on orchestrator). The vault itself stays
+private; this repo holds the hook, the digest script, a synthetic sample vault and a test script.
 
-The vault content stays private; this repo is the machinery, a synthetic sample
-vault, and a test suite that proves each enforcement claim.
+## What the hook checks
 
-## The problem
+`hooks/commit-msg` runs `scripts/validate-vault.ps1` (85 lines of PowerShell) against the staged
+files of the commit:
 
-If AI agents write to a knowledge base unattended, three things rot it:
+- A file under `raw/` can be added. Editing or deleting one is blocked unless the commit subject
+  starts with `[destructive]`.
+- Deleting any file is blocked without that same subject prefix.
+- An added or changed markdown file under `areas/` (four housekeeping filenames excepted) has to
+  open with frontmatter carrying eight nonempty fields: `title`, `type`, `area`, `created`,
+  `updated`, `review_by`, `sources`, `status`. Its `area` value has to match the directory it sits
+  in.
+- If any such page changed, `meta/changelog.md` has to be staged in the same commit. The hook checks
+  that the file is staged; it does not read the entry.
+- Every `[[wikilink]]` in a staged markdown file under `areas/`, `wiki/` or `meta/` has to resolve to
+  a page in the index, by filename or by frontmatter title. Links in files that were not staged are
+  not checked, so a `[destructive]` deletion can leave links elsewhere broken.
 
-1. **Silent destruction** — an agent "cleans up" or rewrites evidence it should have preserved.
-2. **Copied-claim drift** — a fact duplicated onto a second page outlives the correction of the original. Every drift incident observed in production was this shape.
-3. **Invisible change** — edits accumulate faster than any human reads diffs, so review silently stops happening.
+Staged paths are read with `git diff --cached -z` and `core.quotepath=false`, so a filename with a
+non-ASCII character, a quote or a newline goes through the same checks. An earlier version missed
+those, and the fix is in the history with a test for each case.
 
-## The invariant model
+## What it does not do
 
-| Invariant | Enforcement |
-|---|---|
-| Evidence is append-only **by default** | `raw/` accepts new dated files only; edits/deletes blocked except via the explicit `[destructive]` path below |
-| Deletions are loud | any deletion requires a `[destructive]` marker in the commit subject — those commits humans read line-by-line |
-| Every claim page carries its contract | frontmatter must be complete: `title`, `type`, `area`, dates, `review_by` (staleness window), `sources` (citations into `raw/`), `status` |
-| Pages can't lie about where they live | `area:` field must match the directory the page sits in |
-| Every wiki change is announced | a change to a claim page without a `meta/changelog.md` entry is blocked — the changelog is the human review surface |
-| Links don't rot | every `[[wikilink]]` in a staged file must resolve to an existing page (filename or title) |
+- It checks shape, and only shape. A wrong claim with complete frontmatter passes.
+- It does not enforce human review. The digest below makes review easier; nothing forces it.
+- `git commit --no-verify` skips the hook. This is a guard against error and drift by cooperating
+  agents. Against an adversary it is no protection at all; that needs server-side checks, which a
+  personal vault does not warrant.
+- Prompt injection through ingested content is handled upstream: in the source system,
+  untrusted captures are stored as evidence and never executed as instructions.
 
-The gate is **mechanical only** — 70 lines of PowerShell in a `commit-msg` hook
-(`scripts/validate-vault.ps1`). Deliberately no LLM in the loop: a gate must be
-deterministic, instant, and immune to persuasion.
+## The review digest
 
-## The review model
+`scripts/review-digest.ps1` lists everything since the last `reviewed` tag: the commits, with
+`[destructive]` ones called out, the lines added to `meta/changelog.md`, and a diffstat. `-Mark`
+moves the tag. It summarises what changed; it does not show every changed page. I moved to this
+from reading each commit when several agent sessions started committing at the same time and
+per-commit review stopped happening.
 
-Machines gate every commit; humans review in **batches**. `scripts/review-digest.ps1`
-shows everything since the last `reviewed` tag: the commit list, destructive commits
-highlighted, the changelog delta (the actual review surface), and a diffstat.
-`-Mark` moves the tag. This replaced per-commit human review, which stopped being
-real the moment multiple agent sessions were committing concurrently — a review
-step that can't keep up is a review step that isn't happening.
-
-## Run the demo
+## Run the tests
 
 ```powershell
 ./test.ps1
 ```
 
-Builds a throwaway git repo from `sample-vault/` and asserts the gate's verdict
-for each violation class:
+Builds a throwaway git repo from `sample-vault/` and checks the gate's verdict for eight
+representative cases:
 
 ```
 PASS  valid new page + changelog entry -> accepted
@@ -62,61 +65,36 @@ PASS  wiki edit without a changelog entry -> blocked
 PASS  broken wikilink -> blocked
 ```
 
-To use it on a real vault: copy `scripts/` in, and `hooks/commit-msg` to `.git/hooks/`.
+The script exits 1 if any case fails, and the same script runs in GitHub Actions on every push.
 
-## Threat model — what this does and does not stop
+To use it on a real vault: copy `scripts/` in and `hooks/commit-msg` to `.git/hooks/`.
 
-**Stops:** accidental destruction, structural rot (missing metadata, broken links),
-silent unreviewed change, agents "fixing" evidence in place.
+## Why these rules
 
-**Does not stop, by design:**
+Each one follows something that went wrong in the source vault:
 
-- **A false claim in valid clothing.** The gate checks shape, not truth. Truth is
-  handled by separate processes in the production system: a contradiction log
-  (conflicts get recorded, not silently resolved), `review_by` staleness windows,
-  and a recurring reconcile pass that checks recorded infrastructure facts against
-  the live machines — because *the vault is a claim; the machine is the truth.*
-- **A hostile actor.** `git commit --no-verify` bypasses any hook. This is a
-  guardrail against error and drift in cooperative-but-fallible agents, not a
-  security boundary against an adversary. An adversarial writer needs server-side
-  enforcement, which a personal vault doesn't warrant.
-- **Prompt injection via ingested content.** Mitigated upstream in the ingest
-  procedure (untrusted captures are quarantined as evidence, never executed as
-  instructions), not by the gate.
+- A readiness score was copied onto a second page. The original was corrected later and the copy
+  kept being read for weeks. The changelog requirement exists so that a change to a claim page
+  shows up in one place a person actually reads.
+- A directory list was copied into a config file that every session read and none wrote. A new
+  directory appeared and the list stayed wrong for six weeks. The `area` field is checked against
+  the directory the file is in for the same reason: a stated fact gets compared with the
+  filesystem before it is believed.
+- An agent reported a task complete when it was not, and a green uptime monitor once hid a dead
+  service (the port listened; the app was gone). That is why `test.ps1` builds a real repo and runs
+  the real hook; the functions are never tested in isolation.
 
-## Field notes (why each rule exists)
+## Design notes
 
-Every rule was paid for by a real incident:
-
-- **One home per claim / changelog-required:** a readiness score was copied onto a
-  second page; the original was later corrected, the copy survived for weeks and
-  kept being read. Corrections propagate only when there is nothing to propagate to.
-- **Constraints, not lists:** a directory roster was copied into a config file that
-  every session reads and none writes — a new directory appeared, and the stale
-  list lied silently for six weeks. Rules are now stated as constraints checked
-  against the filesystem, never as enumerations.
-- **Verify against ground truth:** an agent once reported a task complete when it
-  wasn't, and a green uptime monitor once hid a dead service (the port listened;
-  the app was gone). Both taught the same lesson the gate encodes: a report is a
-  claim, not a fact.
-
-## Design decisions
-
-- **Batch digest over per-commit review** — chosen when concurrent agent sessions
-  made per-commit review fiction. The gate makes additive commits safe to land
-  unreviewed; the `[destructive]` marker keeps the dangerous class loud.
-- **Git as the audit log** — rejected a database/CRDT design: git already provides
-  immutable history, authorship, and diffs; the vault is markdown so the audit
-  layer costs nothing.
-- **No LLM in the gate** — rejected an LLM-reviewer step at commit time:
-  non-deterministic, slow, and an agent can talk another agent into things it
-  cannot talk a regex into.
+- Review in batches, because per-commit review stopped happening once several
+  sessions were committing concurrently.
+- Git as the record. It already keeps history, authorship metadata and diffs in a format that fits
+  a markdown vault. Its history can be rewritten, and the workflow still needs review and
+  maintenance.
+- No model in the hook. A commit-time check has to give the same answer every time and finish at
+  once. A model-based reviewer would do neither, and it could be argued with.
 
 ## Authorship
 
-Built solo, pair-programming with Claude Code: the invariant model, the review
-split, and the decisions above are mine; the implementation is AI-generated and
-verified by behavior — the test suite in this repo is that discipline made concrete. The system exists precisely because AI output
-can be confidently wrong — the production incident log above includes the AI
-itself misreporting completion, which is what "gate everything mechanically"
-is for.
+Claude Code produced much of the implementation; I defined the behaviour and acceptance criteria,
+reviewed what it produced against those, and owned testing and deployment.

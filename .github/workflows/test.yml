@@ -1,0 +1,14 @@
+name: gate tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run the gate tests
+        shell: pwsh
+        run: ./test.ps1
