@@ -142,11 +142,35 @@ try {
     Assert-Gate 'turning a page into a symlink -> blocked' 1 {
         $blob = ('elsewhere.md' | git hash-object -w --stdin).Trim()
         G update-index --cacheinfo "120000,$blob,areas/gardening/entities/tomato-bed.md"
-    } -reason 'symlinks are not allowed' -ManualStage
+    } -reason 'areas/gardening/entities/tomato-bed\.md: mode 120000' -ManualStage
     Assert-Gate 'adding a symlink under raw/ -> blocked' 1 {
         $blob = ('/etc/hostname' | git hash-object -w --stdin).Trim()
         G update-index --add --cacheinfo "120000,$blob,raw/note-2026-01-09-link.md"
-    } -reason 'symlinks are not allowed' -ManualStage
+    } -reason 'raw/note-2026-01-09-link\.md: mode 120000' -ManualStage
+    Assert-Gate 'turning a page into a gitlink -> blocked' 1 {
+        $commit = (git rev-parse HEAD).Trim()
+        G rm -q --cached areas/gardening/entities/tomato-bed.md
+        G update-index --add --cacheinfo "160000,$commit,areas/gardening/entities/tomato-bed.md"
+    } -reason 'areas/gardening/entities/tomato-bed\.md: mode 160000' -ManualStage
+    Assert-Gate 'gitlink replaced by an invalid page -> blocked' 1 {
+        $commit = (git rev-parse HEAD).Trim()
+        G rm -q --cached areas/gardening/entities/tomato-bed.md
+        G update-index --add --cacheinfo "160000,$commit,areas/gardening/entities/tomato-bed.md"
+        G commit -qm 'seed gitlink'
+        $blob = ('no frontmatter, and a [[No Such Page]] link' | git hash-object -w --stdin).Trim()
+        G update-index --cacheinfo "100644,$blob,areas/gardening/entities/tomato-bed.md"
+    } -reason 'areas/gardening/entities/tomato-bed\.md: frontmatter is missing' -ManualStage
+    Assert-Gate 'adding a gitlink under raw/ -> blocked' 1 {
+        $commit = (git rev-parse HEAD).Trim()
+        G update-index --add --cacheinfo "160000,$commit,raw/note-2026-01-09-evidence.md"
+    } -reason 'raw/note-2026-01-09-evidence\.md: mode 160000' -ManualStage
+    Assert-Gate 'page with an uppercase .MD extension -> blocked' 1 {
+        Set-Content areas/gardening/entities/compost-bin.MD 'no frontmatter, and a [[No Such Page]] link'
+    } -reason 'areas/gardening/entities/compost-bin\.MD: frontmatter is missing'
+    Assert-Gate 'symlink with an uppercase .MD extension -> blocked' 1 {
+        $blob = ('elsewhere.md' | git hash-object -w --stdin).Trim()
+        G update-index --add --cacheinfo "120000,$blob,areas/gardening/entities/tomato-bed.MD"
+    } -reason 'areas/gardening/entities/tomato-bed\.MD: mode 120000' -ManualStage
     Assert-Gate 'wiki edit without a changelog entry -> blocked' 1 {
         Add-Content areas/gardening/entities/tomato-bed.md 'Mulched 2026-01-12.'
     } -reason 'without an added or modified'

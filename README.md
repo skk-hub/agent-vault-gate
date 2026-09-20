@@ -13,12 +13,15 @@ synthetic sample vault and a test script.
 - A file under `raw/` can be added. Editing or deleting one is blocked unless the commit subject
   starts with `[destructive]`. A subject that merely mentions the marker does not count.
 - Deleting any file is blocked without that same subject prefix.
-- A symlink under `raw/`, or in place of a markdown page under `areas/`, `wiki/` or `meta/`, is
-  blocked whether it is new or replaces a file.
-- A markdown page directly under `areas/` is rejected, whatever its name. An added or changed page
-  under `areas/<area>/` (four housekeeping filenames excepted) has to open with a closed
-  frontmatter block carrying eight nonempty fields: `title`, `type`, `area`, `created`,
-  `updated`, `review_by`, `sources`, `status`. Its `area` value has to equal the directory name.
+- Anything staged under `raw/`, `areas/`, `wiki/` or `meta/` whose mode is not a regular file is
+  blocked, new or replacing a file: that covers a symlink and a gitlink pointing at another
+  repository.
+- A markdown page directly under `areas/` is rejected, whatever its name. Any staged page under
+  `areas/<area>/` (four housekeeping filenames excepted) has to open with a closed frontmatter
+  block carrying eight nonempty fields: `title`, `type`, `area`, `created`, `updated`,
+  `review_by`, `sources`, `status`. Its `area` value has to equal the directory name. A page is
+  recognised by its path, so the extension matches regardless of case and a type change is
+  checked like any other change.
 - If any such page changed, `meta/changelog.md` has to be added or modified in the same commit.
   The hook checks the file changed; it does not read the entry.
 - Every `[[wikilink]]` in a staged markdown page under `areas/`, `wiki/` or `meta/` has to resolve
@@ -70,7 +73,8 @@ The script builds a throwaway git repo from `sample-vault/` and checks the gate'
 its diagnostic for each rule above and each way past it that review found (the non-ASCII, quoted
 and newline filenames, the mid-subject and leading-space markers, the unstaged link target, the
 deleted changelog, the unclosed frontmatter, the housekeeping name in the wrong place, the two
-symlink shapes, the `Title:` CRLF page), plus git failing under the gate. It then copies
+symlink shapes, the three gitlink shapes, the uppercase `.MD` extension, the `Title:` CRLF page),
+plus git failing under the gate. It then copies
 `hooks/commit-msg` into that repo and makes two real commits through it, one that has to be
 blocked and one that has to pass, and finally runs the digest through create, list (destructive
 commit, blank and `+`-prefixed changelog lines, a merge resolution), the three refused `-Through`

@@ -26,7 +26,12 @@ function Read-Frontmatter([string[]]$Lines) {
 # Paths are tested with ordinal string operations, not regexes: a path can contain a newline, and
 # '.' in a regex would not match it.
 function Test-Under([string]$Path, [string[]]$Dirs) { foreach ($d in $Dirs) { if ($Path.StartsWith("$d/")) { return $true } } ; return $false }
-function Test-Page([string]$Path) { return $Path.EndsWith('.md') -and (Test-Under $Path 'areas', 'wiki', 'meta') }
+# A page is a page because of where it sits and what it is called, and '.MD' is the same file to
+# git and to Windows, so the extension is matched without regard to case.
+function Test-Page([string]$Path) { return $Path.EndsWith('.md', [System.StringComparison]::OrdinalIgnoreCase) -and (Test-Under $Path 'areas', 'wiki', 'meta') }
+# What a staged entry IS comes from its mode, not from its status letter. Only a regular file
+# holds content the rest of the gate can read; 120000 is a symlink and 160000 a gitlink.
+function Test-Blob([string]$Mode) { return $Mode -in '100644', '100755' }
 
 try {
   $msg = if ($MsgFile -and (Test-Path -LiteralPath $MsgFile)) { [string](Get-Content -LiteralPath $MsgFile -Raw) } else { '' }
@@ -53,9 +58,11 @@ try {
     if ($f.Status -eq 'D' -and -not $destructive) {
       $fail.Add("deletion of '$($f.Path)' requires a [destructive] subject.")
     }
-    # A symlink is never a page or an evidence file, whether it is new or replaces one.
-    if ($f.Mode -eq '120000' -and ((Test-Under $f.Path 'raw') -or (Test-Page $f.Path))) {
-      $fail.Add("$($f.Path): symlinks are not allowed under raw/ or as markdown pages.")
+    # Nothing but a regular file belongs in the vault, whether it is new or replaces something.
+    # A symlink points outside it and a gitlink is a whole other repository the gate cannot read.
+    # A deletion has no new mode and is covered above.
+    if ($f.Status -ne 'D' -and -not (Test-Blob $f.Mode) -and (Test-Under $f.Path 'raw', 'areas', 'wiki', 'meta')) {
+      $fail.Add("$($f.Path): mode $($f.Mode) is not a regular file. Symlinks and gitlinks are not allowed under raw/, areas/, wiki/ or meta/.")
     }
   }
 
@@ -64,7 +71,7 @@ try {
   $exempt = '_handoff.md', '_area.md', '_router.md', '_claude-packet.md'
   $required = 'title', 'type', 'area', 'created', 'updated', 'review_by', 'sources', 'status'
   $claimPages = [System.Collections.Generic.List[object]]::new()
-  foreach ($f in $staged | Where-Object { $_.Status -in 'A', 'M' -and $_.Path.EndsWith('.md') -and (Test-Under $_.Path 'areas') }) {
+  foreach ($f in $staged | Where-Object { $_.Status -ne 'D' -and (Test-Blob $_.Mode) -and (Test-Page $_.Path) -and (Test-Under $_.Path 'areas') }) {
     $parts = $f.Path.Split('/')
     if ($parts.Count -lt 3) { $fail.Add("$($f.Path): claim pages must live under areas/<area>/."); continue }
     if ($parts[-1] -in $exempt) { continue }
@@ -105,7 +112,7 @@ try {
     $fm = Read-Frontmatter $lines[$path].ToArray()
     if ($fm -and $fm['title']) { [void]$targets.Add($fm['title']) }
   }
-  foreach ($f in $staged | Where-Object { $_.Status -in 'A', 'M' -and (Test-Page $_.Path) }) {
+  foreach ($f in $staged | Where-Object { $_.Status -ne 'D' -and (Test-Blob $_.Mode) -and (Test-Page $_.Path) }) {
     $txt = (Invoke-Git @('show', ":$($f.Path)")) -join "`n"
     $txt = $txt -replace '`[^`]*`', ''   # a link inside backticks is being quoted, not made
     foreach ($m in [regex]::Matches($txt, '\[\[([^\]\|#]+)(#[^\]\|]*)?(\|[^\]]*)?\]\]')) {
